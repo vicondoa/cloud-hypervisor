@@ -45,7 +45,6 @@ pub use self::console::{Console, ConsoleResizer, Endpoint};
 pub use self::device::{
     ActivationContext, DmaRemapping, VirtioCommon, VirtioDevice, VirtioInterrupt,
     VirtioInterruptType, VirtioSharedMemoryList,
-    VirtioSharedMemory,
 };
 pub use self::epoll_helper::{
     EPOLL_HELPER_EVENT_LAST, EpollHelper, EpollHelperError, EpollHelperHandler,
@@ -116,8 +115,6 @@ pub enum ActivateError {
     #[error("Failed to setup vhost-user daemon")]
     VhostUserSetup(#[source] vhost_user::Error),
     #[error("Failed to create seccomp filter")]
-    VhostUserGpuSetup(#[source] vhost_user::Error),
-    #[error("Failed to create seccomp filter: {0}")]
     CreateSeccompFilter(#[source] seccompiler::Error),
     #[error("Failed to create rate limiter")]
     CreateRateLimiter(#[source] std::io::Error),

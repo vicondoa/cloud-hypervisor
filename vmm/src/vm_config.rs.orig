@@ -517,13 +517,6 @@ impl ApplyLandlock for GenericVhostUserConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-pub struct GpuConfig {
-    pub socket: PathBuf,
-    #[serde(flatten)]
-    pub pci_common: PciDeviceCommonConfig,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PmemConfig {
     #[serde(flatten)]
     pub pci_common: PciDeviceCommonConfig,
@@ -1035,7 +1028,6 @@ pub struct VmConfig {
     pub balloon: Option<BalloonConfig>,
     pub generic_vhost_user: Option<Vec<GenericVhostUserConfig>>,
     pub fs: Option<Vec<FsConfig>>,
-    pub gpu: Option<Vec<GpuConfig>>,
     pub pmem: Option<Vec<PmemConfig>>,
     #[serde(default)]
     pub serial: SerialConfig,

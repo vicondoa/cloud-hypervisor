@@ -299,28 +299,6 @@ paths:
         500:
           description: The new device could not be added to the VM instance.
 
-  /vm.add-gpu:
-    put:
-      summary: Add a new virtio-gpu device to the VM
-      requestBody:
-        description: The details of the new virtio-gpu
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GpuConfig"
-        required: true
-      responses:
-        200:
-          description: The new device was successfully added to the VM instance.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PciDeviceInfo"
-        204:
-          description: The new device was successfully (cold) added to the VM instance.
-        500:
-          description: The new device could not be added to the VM instance.
-
   /vm.add-pmem:
     put:
       summary: Add a new pmem device to the VM
@@ -647,10 +625,6 @@ components:
           $ref: "#/components/schemas/RngConfig"
         balloon:
           $ref: "#/components/schemas/BalloonConfig"
-        gpu:
-          type: array
-          items:
-            $ref: "#/components/schemas/GpuConfig"
         fs:
           type: array
           items:
@@ -1179,19 +1153,6 @@ components:
           format: uint8
         virtio_id:
           type: uint32
-
-    GpuConfig:
-      required:
-        - socket
-      type: object
-      properties:
-        socket:
-          type: string
-        pci_segment:
-          type: integer
-          format: int16
-        id:
-          type: string
 
     PmemConfig:
       required:

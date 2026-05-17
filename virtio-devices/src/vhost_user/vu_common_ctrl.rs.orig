@@ -15,7 +15,6 @@ use vhost::vhost_kern::vhost_binding::VHOST_VRING_F_LOG;
 use vhost::vhost_user::message::{
     VhostTransferStateDirection, VhostTransferStatePhase, VhostUserHeaderFlag, VhostUserInflight,
     VhostUserProtocolFeatures, VhostUserVirtioFeatures,
-    VhostSharedMemoryRegion,
 };
 use vhost::vhost_user::{
     Frontend, FrontendReqHandler, VhostUserFrontend, VhostUserFrontendReqHandler,
@@ -113,12 +112,6 @@ impl VhostUserHandle {
         self.vu
             .add_mem_region(&region)
             .map_err(Error::VhostUserAddMemReg)
-    }
-
-    pub fn get_shared_memory_regions(&mut self) -> Result<Vec<VhostSharedMemoryRegion>> {
-        self.vu
-            .get_shared_memory_regions()
-            .map_err(Error::VhostUserGetSharedMemoryRegions)
     }
 
     pub fn negotiate_features_vhost_user(

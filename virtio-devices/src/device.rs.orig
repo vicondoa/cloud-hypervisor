@@ -6,7 +6,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::io::Write;
 use std::num::Wrapping;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -58,7 +58,7 @@ pub struct VirtioSharedMemoryList {
     pub mem_slot: u32,
     pub addr: GuestAddress,
     pub mapping: Arc<MmapRegion>,
-    pub region_list: BTreeMap<u8, VirtioSharedMemory>,
+    pub region_list: Vec<VirtioSharedMemory>,
 }
 
 pub struct ActivationContext {

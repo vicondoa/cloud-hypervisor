@@ -12,7 +12,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{self, IsTerminal, Seek, SeekFrom, stdout};
-use std::iter::once;
 use std::num::Wrapping;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::{AsRawFd, FromRawFd};
@@ -90,7 +89,7 @@ use virtio_devices::transport::{VirtioPciDevice, VirtioPciDeviceActivator, Virti
 use virtio_devices::vhost_user::VhostUserConfig;
 use virtio_devices::{
     AccessPlatformMapping, ActivateError, Block, Endpoint, IommuMapping, VdpaDmaMapping,
-    VirtioMemMappingSource, VirtioSharedMemory, VirtioSharedMemoryList,
+    VirtioMemMappingSource,
 };
 use vm_allocator::{AddressAllocator, InterruptAllocError, SystemAllocator};
 use vm_device::dma_mapping::ExternalDmaMapping;
@@ -125,7 +124,6 @@ use crate::vm_config::{
     ConsoleOutputMode, DEFAULT_IOMMU_ADDRESS_WIDTH_BITS, DEFAULT_PCI_SEGMENT_APERTURE_WEIGHT,
     DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PciDeviceCommonConfig,
     PmemConfig, UserDeviceConfig, VdpaConfig, VhostMode, VmConfig, VsockConfig,
-    GpuConfig,
 };
 use crate::{DEVICE_MANAGER_SNAPSHOT_ID, GuestRegionMmap, PciDeviceInfo, device_node};
 
@@ -154,7 +152,6 @@ const IVSHMEM_DEVICE_NAME: &str = "__ivshmem";
 // identifiers if the user doesn't give one
 const DISK_DEVICE_NAME_PREFIX: &str = "_disk";
 const FS_DEVICE_NAME_PREFIX: &str = "_fs";
-const GPU_DEVICE_NAME_PREFIX: &str = "_gpu";
 const NET_DEVICE_NAME_PREFIX: &str = "_net";
 const GENERIC_VHOST_USER_DEVICE_NAME_PREFIX: &str = "_generic_vhost_user";
 const PMEM_DEVICE_NAME_PREFIX: &str = "_pmem";
@@ -204,17 +201,9 @@ pub enum DeviceManagerError {
     #[error("Cannot create virtio-fs device")]
     CreateVirtioFs(#[source] virtio_devices::vhost_user::Error),
 
-    /// Cannot create virtio-gpu device
-    #[error("Cannot create virtio-gpu device: {0}")]
-    CreateVirtioGpu(#[source] virtio_devices::vhost_user::Error),
-
     /// Virtio-fs device was created without a socket.
     #[error("Virtio-fs device was created without a socket")]
     NoVirtioFsSock,
-
-    /// Virtio-gpu device was created without a socket.
-    #[error("Virtio-gpu device was created without a socket")]
-    NoVirtioGpuSock,
 
     /// Generic vhost-user device was created without a socket.
     #[error("Generic vhost-user device was created without a socket")]
@@ -328,10 +317,6 @@ pub enum DeviceManagerError {
     /// Cannot find a memory range for virtio-fs
     #[error("Cannot find a memory range for virtio-fs")]
     FsRangeAllocation,
-
-    /// Cannot find a memory range for virtio-gpu
-    #[error("Cannot find a memory range for virtio-gpu")]
-    GpuRangeAllocation,
 
     /// Error creating serial output file
     #[error("Error creating serial output file")]
@@ -2645,9 +2630,6 @@ impl DeviceManager {
         // Add virtio-fs if required
         self.make_virtio_fs_devices()?;
 
-        // Add virtio-gpu if required
-        self.make_virtio_gpu_devices()?;
-
         // Add virtio-pmem if required
         self.make_virtio_pmem_devices()?;
 
@@ -3248,117 +3230,6 @@ impl DeviceManager {
             }
         }
         self.config.lock().unwrap().fs = fs_devices;
-
-        Ok(())
-    }
-
-    fn make_virtio_gpu_device(
-        &mut self,
-        gpu_cfg: &mut GpuConfig,
-    ) -> DeviceManagerResult<MetaVirtioDevice> {
-        let id = if let Some(id) = &gpu_cfg.pci_common.id {
-            id.clone()
-        } else {
-            let id = self.next_device_name(GPU_DEVICE_NAME_PREFIX)?;
-            gpu_cfg.pci_common.id = Some(id.clone());
-            id
-        };
-
-        info!("Creating virtio-gpu device: {gpu_cfg:?}");
-
-        let mut node = device_node!(id);
-
-        if let Some(gpu_socket) = gpu_cfg.socket.to_str() {
-            let (mut virtio_gpu_device, region) = virtio_devices::vhost_user::Gpu::new(
-                id.clone(),
-                gpu_socket,
-                self.seccomp_action.clone(),
-                self.exit_evt
-                    .try_clone()
-                    .map_err(DeviceManagerError::EventFd)?,
-                self.force_access_platform | gpu_cfg.pci_common.iommu,
-            )
-            .map_err(DeviceManagerError::CreateVirtioGpu)?;
-
-            // In crosvm, the 8 GiB bar is 8 GiB-aligned.
-            let cache_base = self.pci_segments[gpu_cfg.pci_common.pci_segment as usize]
-                .mem64_allocator
-                .lock()
-                .unwrap()
-                .allocate(None, region.length as GuestUsize, Some(region.length))
-                .ok_or(DeviceManagerError::GpuRangeAllocation)?
-                .raw_value();
-
-            // Update the node with correct resource information.
-            node.resources.push(Resource::MmioAddressRange {
-                base: cache_base,
-                size: region.length,
-            });
-
-            let mmap_region = MmapRegion::build(
-                None,
-                region.length as usize,
-                libc::PROT_NONE,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-            )
-            .map_err(DeviceManagerError::NewMmapRegion)?;
-
-            // SAFETY: `mmap_region.size()` and `mmap_region.as_ptr()` refer to an allocation.
-            // We remove the userspace mapping before dropping the device if the device is
-            // ejected.
-            let mem_slot = unsafe {
-                self.memory_manager
-                    .lock()
-                    .unwrap()
-                    .create_userspace_mapping(
-                        cache_base,
-                        mmap_region.size(),
-                        mmap_region.as_ptr(),
-                        false,
-                        false,
-                        false,
-                    )
-                    .map_err(DeviceManagerError::MemoryManager)?
-            };
-
-            let region_list = once((
-                region.id,
-                VirtioSharedMemory {
-                    offset: 0,
-                    len: region.length,
-                },
-            ))
-            .collect();
-
-            virtio_gpu_device.set_cache(VirtioSharedMemoryList {
-                mapping: Arc::new(mmap_region),
-                mem_slot,
-                addr: GuestAddress(cache_base),
-                region_list,
-            });
-
-            self.device_tree.lock().unwrap().insert(id.clone(), node);
-
-            Ok(MetaVirtioDevice {
-                virtio_device: Arc::new(Mutex::new(virtio_gpu_device))
-                    as Arc<Mutex<dyn virtio_devices::VirtioDevice>>,
-                pci_common: gpu_cfg.pci_common.clone(),
-                dma_handler: None,
-            })
-        } else {
-            Err(DeviceManagerError::NoVirtioGpuSock)
-        }
-    }
-
-    fn make_virtio_gpu_devices(&mut self) -> DeviceManagerResult<()> {
-        let mut gpu_devices = self.config.lock().unwrap().gpu.clone();
-        if let Some(gpu_list_cfg) = &mut gpu_devices {
-            for gpu_cfg in gpu_list_cfg.iter_mut() {
-                let device = self.make_virtio_gpu_device(gpu_cfg)?;
-                self.virtio_devices.push(device);
-            }
-        }
-        self.config.lock().unwrap().gpu = gpu_devices;
 
         Ok(())
     }
@@ -4894,7 +4765,6 @@ impl DeviceManager {
                 VirtioDeviceType::Block
                 | VirtioDeviceType::Pmem
                 | VirtioDeviceType::Fs
-                | VirtioDeviceType::Gpu
                 | VirtioDeviceType::Vsock => {}
                 _ => return Err(DeviceManagerError::RemovalNotAllowed(device_type)),
             }
@@ -5213,13 +5083,6 @@ impl DeviceManager {
         self.validate_identifier(&generic_vhost_user_cfg.pci_common.id)?;
 
         let device = self.make_generic_vhost_user_device(generic_vhost_user_cfg)?;
-        self.hotplug_virtio_pci_device(device)
-    }
-
-    pub fn add_gpu(&mut self, gpu_cfg: &mut GpuConfig) -> DeviceManagerResult<PciDeviceInfo> {
-        self.validate_identifier(&gpu_cfg.pci_common.id)?;
-
-        let device = self.make_virtio_gpu_device(gpu_cfg)?;
         self.hotplug_virtio_pci_device(device)
     }
 

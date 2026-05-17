@@ -67,7 +67,6 @@ use crate::vm::{Error as VmError, Vm, VmState};
 use crate::vm_config::{
     DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
     UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
-    GpuConfig,
 };
 
 mod acpi;
@@ -2366,31 +2365,6 @@ impl RequestHandler for Vmm {
         }
     }
 
-    fn vm_add_gpu(&mut self, gpu_cfg: GpuConfig) -> result::Result<Option<Vec<u8>>, VmError> {
-        self.vm_config.as_ref().ok_or(VmError::VmNotCreated)?;
-
-        {
-            // Validate the configuration change in a cloned configuration
-            let mut config = self.vm_config.as_ref().unwrap().lock().unwrap().clone();
-            add_to_config(&mut config.gpu, gpu_cfg.clone());
-            config.validate().map_err(VmError::ConfigValidation)?;
-        }
-
-        if let Some(ref mut vm) = self.vm {
-            let info = vm.add_gpu(gpu_cfg).inspect_err(|e| {
-                error!("Error when adding new gpu to the VM: {e:?}");
-            })?;
-            serde_json::to_vec(&info)
-                .map(Some)
-                .map_err(VmError::SerializeJson)
-        } else {
-            // Update VmConfig by adding the new device.
-            let mut config = self.vm_config.as_ref().unwrap().lock().unwrap();
-            add_to_config(&mut config.gpu, gpu_cfg);
-            Ok(None)
-        }
-    }
-
     fn vm_add_pmem(&mut self, pmem_cfg: PmemConfig) -> result::Result<Option<Vec<u8>>, VmError> {
         self.vm_config.as_ref().ok_or(VmError::VmNotCreated)?;
 
@@ -2682,7 +2656,6 @@ mod unit_tests {
         CommonConsoleConfig, ConsoleConfig, ConsoleOutputMode, CoreScheduling, CpuFeatures,
         CpusConfig, HotplugMethod, MemoryConfig, PayloadConfig, PciDeviceCommonConfig, RngConfig,
         SerialConfig,
-    GpuConfig,
     };
 
     fn create_dummy_vmm() -> Vmm {
@@ -2710,7 +2683,6 @@ mod unit_tests {
                 kvm_hyperv: false,
                 max_phys_bits: 46,
                 affinity: None,
-            gpu: None,
                 features: CpuFeatures::default(),
                 nested: true,
                 core_scheduling: CoreScheduling::default(),
@@ -3039,55 +3011,6 @@ mod unit_tests {
                 .clone()
                 .unwrap()[0],
             generic_vhost_user_config
-        );
-    }
-
-    #[test]
-    fn test_vmm_vm_cold_add_gpu() {
-        let mut vmm = create_dummy_vmm();
-        let gpu_config = GpuConfig::parse("socket=/tmp/sock").unwrap();
-
-        assert!(matches!(
-            vmm.vm_add_gpu(gpu_config.clone()),
-            Err(VmError::VmNotCreated)
-        ));
-
-        let _ = vmm.vm_create(create_dummy_vm_config());
-        assert!(
-            vmm.vm_config
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .gpu
-                .is_none()
-        );
-
-        let result = vmm.vm_add_gpu(gpu_config.clone());
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-        assert_eq!(
-            vmm.vm_config
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .gpu
-                .clone()
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            vmm.vm_config
-                .as_ref()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .gpu
-                .clone()
-                .unwrap()[0],
-            gpu_config
         );
     }
 

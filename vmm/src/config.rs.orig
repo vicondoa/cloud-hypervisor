@@ -49,12 +49,6 @@ pub enum Error {
     /// Filesystem socket is missing
     #[error("Error parsing --fs: socket missing")]
     ParseFsSockMissing,
-    /// GPU parameter is invalid
-    #[error("Error parsing --gpu: {0}")]
-    ParseGpu(OptionParserError),
-    /// GPU socket is missing
-    #[error("Error parsing --gpu: socket missing")]
-    ParseGpuSockMissing,
     /// Generic vhost-user virtio ID is invalid
     #[error(
         "Error parsing --generic-vhost-user: virtio ID {0:?} invalid (leading zeros or unknown string)"
@@ -465,7 +459,6 @@ pub struct VmParams<'a> {
     pub rng: &'a str,
     pub balloon: Option<&'a str>,
     pub fs: Option<Vec<&'a str>>,
-    pub gpu: Option<Vec<&'a str>>,
     pub generic_vhost_user: Option<Vec<&'a str>>,
     pub pmem: Option<Vec<&'a str>>,
     pub serial: &'a str,
@@ -528,9 +521,6 @@ impl<'a> VmParams<'a> {
         let fs: Option<Vec<&str>> = args
             .get_many::<String>("fs")
             .map(|x| x.map(|y| y as &str).collect());
-        let gpu: Option<Vec<&str>> = args
-            .get_many::<String>("gpu")
-            .map(|x| x.map(|y| y as &str).collect());
         let generic_vhost_user: Option<Vec<&str>> = args
             .get_many::<String>("generic-vhost-user")
             .map(|x| x.map(|y| y as &str).collect());
@@ -588,7 +578,6 @@ impl<'a> VmParams<'a> {
             rng,
             balloon,
             fs,
-            gpu,
             generic_vhost_user,
             pmem,
             serial,
@@ -2011,48 +2000,6 @@ impl FsConfig {
     }
 }
 
-impl GpuConfig {
-    pub const SYNTAX: &'static str = "virtio-gpu parameters \
-    \"socket=<socket_path>,id=<device_id>,pci_segment=<segment_id>\"";
-
-    pub fn parse(gpu: &str) -> Result<Self> {
-        let mut parser = OptionParser::new();
-        parser.add("socket").add("id").add("pci_segment");
-        parser.parse(gpu).map_err(Error::ParseGpu)?;
-
-        let socket = PathBuf::from(parser.get("socket").ok_or(Error::ParseGpuSockMissing)?);
-        let id = parser.get("id");
-        let pci_segment = parser
-            .convert("pci_segment")
-            .map_err(Error::ParseGpu)?
-            .unwrap_or_default();
-
-        Ok(GpuConfig {
-            socket,
-            pci_common: PciDeviceCommonConfig {
-                id,
-                pci_segment,
-                ..Default::default()
-            },
-        })
-    }
-
-    pub fn validate(&self, vm_config: &VmConfig) -> ValidationResult<()> {
-        if let Some(platform_config) = vm_config.platform.as_ref() {
-            if self.pci_common.pci_segment >= platform_config.num_pci_segments {
-                return Err(ValidationError::InvalidPciSegment(self.pci_common.pci_segment));
-            }
-            if let Some(iommu_segments) = platform_config.iommu_segments.as_ref()
-                && iommu_segments.contains(&self.pci_common.pci_segment)
-                && !self.pci_common.iommu
-            {
-                return Err(ValidationError::OnIommuSegment(self.pci_common.pci_segment));
-            }
-        }
-        Ok(())
-    }
-}
-
 #[cfg(feature = "fw_cfg")]
 impl FwCfgConfig {
     pub const SYNTAX: &'static str = "Boot params to pass to FW CFG device \
@@ -3371,15 +3318,6 @@ impl VmConfig {
             generic_vhost_user = Some(generic_vhost_user_config_list);
         }
 
-        let mut gpu: Option<Vec<GpuConfig>> = None;
-        if let Some(gpu_list) = &vm_params.gpu {
-            let mut gpu_config_list = Vec::new();
-            for item in gpu_list.iter() {
-                gpu_config_list.push(GpuConfig::parse(item)?);
-            }
-            gpu = Some(gpu_config_list);
-        }
-
         let mut pmem: Option<Vec<PmemConfig>> = None;
         if let Some(pmem_list) = &vm_params.pmem {
             let mut pmem_config_list = Vec::new();
@@ -3517,7 +3455,6 @@ impl VmConfig {
             balloon,
             generic_vhost_user,
             fs,
-            gpu,
             pmem,
             serial,
             console,
@@ -3659,7 +3596,6 @@ impl Clone for VmConfig {
             #[cfg(feature = "pvmemcontrol")]
             pvmemcontrol: self.pvmemcontrol.clone(),
             fs: self.fs.clone(),
-            gpu: self.gpu.clone(),
             generic_vhost_user: self.generic_vhost_user.clone(),
             pmem: self.pmem.clone(),
             serial: self.serial.clone(),
@@ -4430,23 +4366,6 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
         Ok(())
     }
 
-    fn gpu_fixture() -> GpuConfig {
-        GpuConfig {
-            socket: PathBuf::from("/tmp/sock"),
-            id: None,
-            pci_segment: 0,
-        }
-    }
-
-    #[test]
-    fn test_parse_gpu() -> Result<()> {
-        // "socket" must be supplied
-        assert!(GpuConfig::parse("").is_err());
-        assert_eq!(GpuConfig::parse("socket=/tmp/sock")?, gpu_fixture());
-
-        Ok(())
-    }
-
     fn pmem_fixture() -> PmemConfig {
         PmemConfig {
             pci_common: PciDeviceCommonConfig::default(),
@@ -4892,7 +4811,6 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             generic_vhost_user: None,
             balloon: None,
             fs: None,
-            gpu: None,
             pmem: None,
             serial: SerialConfig::default(),
             console: ConsoleConfig::default(),
@@ -5126,7 +5044,6 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             },
             balloon: None,
             fs: None,
-            gpu: None,
             generic_vhost_user: None,
             pmem: None,
             serial: SerialConfig {
@@ -5310,13 +5227,6 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             vhost_socket: Some("/path/to/sock".to_owned()),
             ..disk_fixture()
         }]);
-        assert_eq!(
-            invalid_config.validate(),
-            Err(ValidationError::VhostUserRequiresSharedMemory)
-        );
-
-        let mut invalid_config = valid_config.clone();
-        invalid_config.gpu = Some(vec![gpu_fixture()]);
         assert_eq!(
             invalid_config.validate(),
             Err(ValidationError::VhostUserRequiresSharedMemory)

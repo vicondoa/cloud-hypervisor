@@ -36,7 +36,6 @@ use vmm::vm_config::{
     LandlockConfig, NetConfig, NumaConfig, PciSegmentConfig, PlatformConfig, PmemConfig,
     RateLimiterGroupConfig, RngConfig, SerialConfig, TpmConfig, UserDeviceConfig, VdpaConfig,
     VmConfig, VsockConfig,
-    GpuConfig,
 };
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::signal::block_signal;
@@ -250,12 +249,6 @@ fn get_cli_options_sorted(
         Arg::new("generic-vhost-user")
             .long("generic-vhost-user")
             .help(GenericVhostUserConfig::SYNTAX)
-            .num_args(1..)
-            .action(ArgAction::Append)
-            .group("vm-config"),
-        Arg::new("gpu")
-            .long("gpu")
-            .help(GpuConfig::SYNTAX)
             .num_args(1..)
             .action(ArgAction::Append)
             .group("vm-config"),
@@ -931,7 +924,6 @@ mod unit_tests {
         CommonConsoleConfig, ConsoleConfig, ConsoleOutputMode, CoreScheduling, CpuFeatures,
         CpusConfig, HotplugMethod, MemoryConfig, PayloadConfig, PciDeviceCommonConfig, RngConfig,
         SerialConfig, VmConfig,
-    GpuConfig,
     };
 
     use crate::test_util::assert_args_sorted;
@@ -1018,7 +1010,6 @@ mod unit_tests {
             },
             balloon: None,
             fs: None,
-            gpu: None,
             generic_vhost_user: None,
             pmem: None,
             serial: SerialConfig {

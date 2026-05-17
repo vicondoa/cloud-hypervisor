@@ -26,7 +26,6 @@ use vmm::config::RestoreConfig;
 use vmm::vm_config::{
     DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
     UserDeviceConfig, VdpaConfig, VsockConfig,
-    GpuConfig,
 };
 #[cfg(feature = "dbus_api")]
 use zbus::{proxy, zvariant::Optional};

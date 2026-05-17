@@ -58,7 +58,6 @@ use crate::vm::{Error as VmError, VmState};
 use crate::vm_config::{
     DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
     UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
-    GpuConfig,
 };
 
 /// API errors are sent back from the VMM API server through the ApiResponse.
@@ -179,10 +178,6 @@ pub enum ApiError {
     /// The generic vhost-user device could not be added to the VM.
     #[error("The generic vhost-user device could not be added to the VM")]
     VmAddGenericVhostUser(#[source] VmError),
-
-    /// The gpu could not be added to the VM.
-    #[error("The GPU could not be added to the VM: {0}")]
-    VmAddGpu(#[source] VmError),
 
     /// The pmem device could not be added to the VM.
     #[error("The pmem device could not be added to the VM")]
@@ -566,8 +561,6 @@ pub trait RequestHandler {
         fs_cfg: GenericVhostUserConfig,
     ) -> Result<Option<Vec<u8>>, VmError>;
 
-    fn vm_add_gpu(&mut self, gpu_cfg: GpuConfig) -> Result<Option<Vec<u8>>, VmError>;
-
     fn vm_add_pmem(&mut self, pmem_cfg: PmemConfig) -> Result<Option<Vec<u8>>, VmError>;
 
     fn vm_add_net(&mut self, net_cfg: NetConfig) -> Result<Option<Vec<u8>>, VmError>;
@@ -784,43 +777,6 @@ impl ApiAction for VmAddGenericVhostUser {
             let response = vmm
                 .vm_add_generic_vhost_user(config)
                 .map_err(ApiError::VmAddGenericVhostUser)
-                .map(ApiResponsePayload::VmAction);
-
-            response_sender
-                .send(response)
-                .map_err(VmmError::ApiResponseSend)?;
-
-            Ok(false)
-        })
-    }
-
-    fn send(
-        &self,
-        api_evt: EventFd,
-        api_sender: Sender<ApiRequest>,
-        data: Self::RequestBody,
-    ) -> ApiResult<Self::ResponseBody> {
-        get_response_body(self, api_evt, api_sender, data)
-    }
-}
-
-pub struct VmAddGpu;
-
-impl ApiAction for VmAddGpu {
-    type RequestBody = GpuConfig;
-    type ResponseBody = Option<Body>;
-
-    fn request(
-        &self,
-        config: Self::RequestBody,
-        response_sender: Sender<ApiResponse>,
-    ) -> ApiRequest {
-        Box::new(move |vmm| {
-            info!("API request event: VmAddGpu {config:?}");
-
-            let response = vmm
-                .vm_add_gpu(config)
-                .map_err(ApiError::VmAddGpu)
                 .map(ApiResponsePayload::VmAction);
 
             response_sender
