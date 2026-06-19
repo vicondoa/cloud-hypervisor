@@ -489,7 +489,7 @@ impl BusDevice for Tpm {
                     }
                 }
                 CRB_LOC_CTRL => {
-                    warn!("CRB_LOC_CTRL locality to write = {locality:?} val = {v:?}");
+                    debug!("CRB_LOC_CTRL locality to write = {locality:?} val = {v:?}");
                     match v {
                         CRB_LOC_CTRL_RESET_ESTABLISHMENT_BIT => {}
                         CRB_LOC_CTRL_RELINQUISH => {
