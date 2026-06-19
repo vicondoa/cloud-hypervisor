@@ -56,3 +56,45 @@ jobs:
           gh release create "$VERSION" release/* \
             --title "$VERSION" \
             --notes "Automated release. cloud-hypervisor with nixling virtio-gpu patches."
+
+      - name: Install Nix (for hash computation)
+        uses: cachix/install-nix-action@v4
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Compute SRI hashes and commit prebuilt manifest
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          REPO="${{ github.repository }}"
+
+          mkdir -p nix
+          {
+            echo "{"
+            echo "  \"version\": \"$VERSION\","
+            echo "  \"system\": \"x86_64-linux\","
+            echo "  \"binaries\": {"
+            first=true
+            for asset in release/*.tar.gz; do
+              [ -f "$asset" ] || continue
+              base=$(basename "$asset")
+              name=$(echo "$base" | sed -E "s/-${VERSION}-x86_64-linux\.tar\.gz$//")
+              sri=$(nix hash file --type sha256 --sri "$asset")
+              url="https://github.com/${REPO}/releases/download/${VERSION}/${base}"
+              if [ "$first" = true ]; then first=false; else printf ',\n'; fi
+              printf '    "%s": {\n      "url": "%s",\n      "hash": "%s"\n    }' "$name" "$url" "$sri"
+            done
+            echo ""
+            echo "  }"
+            echo "}"
+          } > nix/prebuilt.json
+
+      - name: Commit prebuilt manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nix/prebuilt.json
+          git diff --cached --quiet && exit 0
+          git commit -m "release: update prebuilt manifest for ${GITHUB_REF_NAME}"
+          git push origin HEAD
