@@ -524,6 +524,13 @@ pub struct GpuConfig {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MediaConfig {
+    pub socket: PathBuf,
+    #[serde(flatten)]
+    pub pci_common: PciDeviceCommonConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PmemConfig {
     #[serde(flatten)]
     pub pci_common: PciDeviceCommonConfig,
@@ -1036,6 +1043,7 @@ pub struct VmConfig {
     pub generic_vhost_user: Option<Vec<GenericVhostUserConfig>>,
     pub fs: Option<Vec<FsConfig>>,
     pub gpu: Option<Vec<GpuConfig>>,
+    pub media: Option<Vec<MediaConfig>>,
     pub pmem: Option<Vec<PmemConfig>>,
     #[serde(default)]
     pub serial: SerialConfig,

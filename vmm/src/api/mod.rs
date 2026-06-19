@@ -56,9 +56,8 @@ use crate::device_tree::DeviceTree;
 use crate::migration_transport::MAX_MIGRATION_CONNECTIONS;
 use crate::vm::{Error as VmError, VmState};
 use crate::vm_config::{
-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
-    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
-    GpuConfig,
+    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, MediaConfig,
+    NetConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
 };
 
 /// API errors are sent back from the VMM API server through the ApiResponse.
@@ -567,6 +566,8 @@ pub trait RequestHandler {
     ) -> Result<Option<Vec<u8>>, VmError>;
 
     fn vm_add_gpu(&mut self, gpu_cfg: GpuConfig) -> Result<Option<Vec<u8>>, VmError>;
+
+    fn vm_add_media(&mut self, media_cfg: MediaConfig) -> Result<Option<Vec<u8>>, VmError>;
 
     fn vm_add_pmem(&mut self, pmem_cfg: PmemConfig) -> Result<Option<Vec<u8>>, VmError>;
 

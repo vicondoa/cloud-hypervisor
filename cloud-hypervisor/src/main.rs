@@ -33,10 +33,9 @@ use vmm::vm_config::FwCfgConfig;
 use vmm::vm_config::IvshmemConfig;
 use vmm::vm_config::{
     BalloonConfig, ConsoleConfig, DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig,
-    LandlockConfig, NetConfig, NumaConfig, PciSegmentConfig, PlatformConfig, PmemConfig,
-    RateLimiterGroupConfig, RngConfig, SerialConfig, TpmConfig, UserDeviceConfig, VdpaConfig,
-    VmConfig, VsockConfig,
-    GpuConfig,
+    GpuConfig, LandlockConfig, MediaConfig, NetConfig, NumaConfig, PciSegmentConfig,
+    PlatformConfig, PmemConfig, RateLimiterGroupConfig, RngConfig, SerialConfig, TpmConfig,
+    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
 };
 use vmm_sys_util::eventfd::EventFd;
 use vmm_sys_util::signal::block_signal;
@@ -444,6 +443,12 @@ fn get_cli_options_sorted(
             .action(ArgAction::SetTrue)
             .help("Print version")
             .num_args(0),
+        Arg::new("vhost-user-media")
+            .long("vhost-user-media")
+            .help(MediaConfig::SYNTAX)
+            .num_args(1..)
+            .action(ArgAction::Append)
+            .group("vm-config"),
         Arg::new("vsock")
             .long("vsock")
             .help(VsockConfig::SYNTAX)
@@ -1019,6 +1024,7 @@ mod unit_tests {
             balloon: None,
             fs: None,
             gpu: None,
+            media: None,
             generic_vhost_user: None,
             pmem: None,
             serial: SerialConfig {

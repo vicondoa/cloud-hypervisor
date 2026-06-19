@@ -55,6 +55,12 @@ pub enum Error {
     /// GPU socket is missing
     #[error("Error parsing --gpu: socket missing")]
     ParseGpuSockMissing,
+    /// Media parameter is invalid
+    #[error("Error parsing --vhost-user-media: {0}")]
+    ParseMedia(OptionParserError),
+    /// Media socket is missing
+    #[error("Error parsing --vhost-user-media: socket missing")]
+    ParseMediaSockMissing,
     /// Generic vhost-user virtio ID is invalid
     #[error(
         "Error parsing --generic-vhost-user: virtio ID {0:?} invalid (leading zeros or unknown string)"
@@ -466,6 +472,7 @@ pub struct VmParams<'a> {
     pub balloon: Option<&'a str>,
     pub fs: Option<Vec<&'a str>>,
     pub gpu: Option<Vec<&'a str>>,
+    pub media: Option<Vec<&'a str>>,
     pub generic_vhost_user: Option<Vec<&'a str>>,
     pub pmem: Option<Vec<&'a str>>,
     pub serial: &'a str,
@@ -531,6 +538,9 @@ impl<'a> VmParams<'a> {
         let gpu: Option<Vec<&str>> = args
             .get_many::<String>("gpu")
             .map(|x| x.map(|y| y as &str).collect());
+        let media: Option<Vec<&str>> = args
+            .get_many::<String>("vhost-user-media")
+            .map(|x| x.map(|y| y as &str).collect());
         let generic_vhost_user: Option<Vec<&str>> = args
             .get_many::<String>("generic-vhost-user")
             .map(|x| x.map(|y| y as &str).collect());
@@ -589,6 +599,7 @@ impl<'a> VmParams<'a> {
             balloon,
             fs,
             gpu,
+            media,
             generic_vhost_user,
             pmem,
             serial,
@@ -2053,6 +2064,48 @@ impl GpuConfig {
     }
 }
 
+impl MediaConfig {
+    pub const SYNTAX: &'static str = "vhost-user-media parameters \
+    \"socket=<socket_path>,id=<device_id>,pci_segment=<segment_id>\"";
+
+    pub fn parse(media: &str) -> Result<Self> {
+        let mut parser = OptionParser::new();
+        parser.add("socket").add("id").add("pci_segment");
+        parser.parse(media).map_err(Error::ParseMedia)?;
+
+        let socket = PathBuf::from(parser.get("socket").ok_or(Error::ParseMediaSockMissing)?);
+        let id = parser.get("id");
+        let pci_segment = parser
+            .convert("pci_segment")
+            .map_err(Error::ParseMedia)?
+            .unwrap_or_default();
+
+        Ok(MediaConfig {
+            socket,
+            pci_common: PciDeviceCommonConfig {
+                id,
+                pci_segment,
+                ..Default::default()
+            },
+        })
+    }
+
+    pub fn validate(&self, vm_config: &VmConfig) -> ValidationResult<()> {
+        if let Some(platform_config) = vm_config.platform.as_ref() {
+            if self.pci_common.pci_segment >= platform_config.num_pci_segments {
+                return Err(ValidationError::InvalidPciSegment(self.pci_common.pci_segment));
+            }
+            if let Some(iommu_segments) = platform_config.iommu_segments.as_ref()
+                && iommu_segments.contains(&self.pci_common.pci_segment)
+                && !self.pci_common.iommu
+            {
+                return Err(ValidationError::OnIommuSegment(self.pci_common.pci_segment));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(feature = "fw_cfg")]
 impl FwCfgConfig {
     pub const SYNTAX: &'static str = "Boot params to pass to FW CFG device \
@@ -3094,6 +3147,18 @@ impl VmConfig {
             }
         }
 
+        if let Some(media_devices) = &self.media {
+            if !media_devices.is_empty() && !self.backed_by_shared_memory() {
+                return Err(ValidationError::VhostUserRequiresSharedMemory);
+            }
+            for media_device in media_devices {
+                media_device.validate(self)?;
+                self.iommu |= media_device.pci_common.iommu;
+
+                Self::validate_identifier(&mut id_list, &media_device.pci_common.id)?;
+            }
+        }
+
         if let Some(pmems) = &self.pmem {
             for pmem in pmems {
                 pmem.validate(self)?;
@@ -3380,6 +3445,15 @@ impl VmConfig {
             gpu = Some(gpu_config_list);
         }
 
+        let mut media: Option<Vec<MediaConfig>> = None;
+        if let Some(media_list) = &vm_params.media {
+            let mut media_config_list = Vec::new();
+            for item in media_list.iter() {
+                media_config_list.push(MediaConfig::parse(item)?);
+            }
+            media = Some(media_config_list);
+        }
+
         let mut pmem: Option<Vec<PmemConfig>> = None;
         if let Some(pmem_list) = &vm_params.pmem {
             let mut pmem_config_list = Vec::new();
@@ -3518,6 +3592,7 @@ impl VmConfig {
             generic_vhost_user,
             fs,
             gpu,
+            media,
             pmem,
             serial,
             console,
@@ -3660,6 +3735,7 @@ impl Clone for VmConfig {
             pvmemcontrol: self.pvmemcontrol.clone(),
             fs: self.fs.clone(),
             gpu: self.gpu.clone(),
+            media: self.media.clone(),
             generic_vhost_user: self.generic_vhost_user.clone(),
             pmem: self.pmem.clone(),
             serial: self.serial.clone(),
@@ -4433,8 +4509,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
     fn gpu_fixture() -> GpuConfig {
         GpuConfig {
             socket: PathBuf::from("/tmp/sock"),
-            id: None,
-            pci_segment: 0,
+            pci_common: PciDeviceCommonConfig::default(),
         }
     }
 
@@ -4443,6 +4518,21 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
         // "socket" must be supplied
         assert!(GpuConfig::parse("").is_err());
         assert_eq!(GpuConfig::parse("socket=/tmp/sock")?, gpu_fixture());
+
+        Ok(())
+    }
+
+    fn media_fixture() -> MediaConfig {
+        MediaConfig {
+            socket: PathBuf::from("/tmp/sock"),
+            pci_common: PciDeviceCommonConfig::default(),
+        }
+    }
+
+    #[test]
+    fn test_parse_media() -> Result<()> {
+        assert!(MediaConfig::parse("").is_err());
+        assert_eq!(MediaConfig::parse("socket=/tmp/sock")?, media_fixture());
 
         Ok(())
     }
@@ -4893,6 +4983,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             balloon: None,
             fs: None,
             gpu: None,
+            media: None,
             pmem: None,
             serial: SerialConfig::default(),
             console: ConsoleConfig::default(),
@@ -5127,6 +5218,7 @@ id=\"{id}\",pci_segment={pci_segment},queue_sizes={queue_sizes}"
             balloon: None,
             fs: None,
             gpu: None,
+            media: None,
             generic_vhost_user: None,
             pmem: None,
             serial: SerialConfig {

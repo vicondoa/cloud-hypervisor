@@ -123,9 +123,9 @@ use crate::serial_manager::{Error as SerialManagerError, SerialManager};
 use crate::vm_config::IvshmemConfig;
 use crate::vm_config::{
     ConsoleOutputMode, DEFAULT_IOMMU_ADDRESS_WIDTH_BITS, DEFAULT_PCI_SEGMENT_APERTURE_WEIGHT,
-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PciDeviceCommonConfig,
-    PmemConfig, UserDeviceConfig, VdpaConfig, VhostMode, VmConfig, VsockConfig,
-    GpuConfig,
+    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, MediaConfig,
+    NetConfig, PciDeviceCommonConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VhostMode,
+    VmConfig, VsockConfig,
 };
 use crate::{DEVICE_MANAGER_SNAPSHOT_ID, GuestRegionMmap, PciDeviceInfo, device_node};
 
@@ -155,6 +155,7 @@ const IVSHMEM_DEVICE_NAME: &str = "__ivshmem";
 const DISK_DEVICE_NAME_PREFIX: &str = "_disk";
 const FS_DEVICE_NAME_PREFIX: &str = "_fs";
 const GPU_DEVICE_NAME_PREFIX: &str = "_gpu";
+const MEDIA_DEVICE_NAME_PREFIX: &str = "_media";
 const NET_DEVICE_NAME_PREFIX: &str = "_net";
 const GENERIC_VHOST_USER_DEVICE_NAME_PREFIX: &str = "_generic_vhost_user";
 const PMEM_DEVICE_NAME_PREFIX: &str = "_pmem";
@@ -208,6 +209,10 @@ pub enum DeviceManagerError {
     #[error("Cannot create virtio-gpu device: {0}")]
     CreateVirtioGpu(#[source] virtio_devices::vhost_user::Error),
 
+    /// Cannot create virtio-media device
+    #[error("Cannot create virtio-media device: {0}")]
+    CreateVirtioMedia(#[source] virtio_devices::vhost_user::Error),
+
     /// Virtio-fs device was created without a socket.
     #[error("Virtio-fs device was created without a socket")]
     NoVirtioFsSock,
@@ -215,6 +220,10 @@ pub enum DeviceManagerError {
     /// Virtio-gpu device was created without a socket.
     #[error("Virtio-gpu device was created without a socket")]
     NoVirtioGpuSock,
+
+    /// Virtio-media device was created without a socket.
+    #[error("Virtio-media device was created without a socket")]
+    NoVirtioMediaSock,
 
     /// Generic vhost-user device was created without a socket.
     #[error("Generic vhost-user device was created without a socket")]
@@ -332,6 +341,10 @@ pub enum DeviceManagerError {
     /// Cannot find a memory range for virtio-gpu
     #[error("Cannot find a memory range for virtio-gpu")]
     GpuRangeAllocation,
+
+    /// Cannot find a memory range for virtio-media
+    #[error("Cannot find a memory range for virtio-media")]
+    MediaRangeAllocation,
 
     /// Error creating serial output file
     #[error("Error creating serial output file")]
@@ -2648,6 +2661,9 @@ impl DeviceManager {
         // Add virtio-gpu if required
         self.make_virtio_gpu_devices()?;
 
+        // Add virtio-media if required
+        self.make_virtio_media_devices()?;
+
         // Add virtio-pmem if required
         self.make_virtio_pmem_devices()?;
 
@@ -3295,13 +3311,16 @@ impl DeviceManager {
                 size: region.length,
             });
 
+            let shm_fd = unsafe { libc::memfd_create(b"virtio-media-shm\0".as_ptr().cast(), libc::MFD_CLOEXEC) };
+            if shm_fd < 0 { return Err(DeviceManagerError::MediaRangeAllocation); }
+            let shm_file = unsafe { std::fs::File::from_raw_fd(shm_fd) };
+            shm_file.set_len(region.length).map_err(|_| DeviceManagerError::MediaRangeAllocation)?;
             let mmap_region = MmapRegion::build(
-                None,
+                Some(vm_memory::FileOffset::new(shm_file, 0)),
                 region.length as usize,
-                libc::PROT_NONE,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-            )
-            .map_err(DeviceManagerError::NewMmapRegion)?;
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+            ).map_err(DeviceManagerError::NewMmapRegion)?;
 
             // SAFETY: `mmap_region.size()` and `mmap_region.as_ptr()` refer to an allocation.
             // We remove the userspace mapping before dropping the device if the device is
@@ -3359,6 +3378,115 @@ impl DeviceManager {
             }
         }
         self.config.lock().unwrap().gpu = gpu_devices;
+
+        Ok(())
+    }
+
+    fn make_media_device(
+        &mut self,
+        media_cfg: &mut MediaConfig,
+    ) -> DeviceManagerResult<MetaVirtioDevice> {
+        let id = if let Some(id) = &media_cfg.pci_common.id {
+            id.clone()
+        } else {
+            let id = self.next_device_name(MEDIA_DEVICE_NAME_PREFIX)?;
+            media_cfg.pci_common.id = Some(id.clone());
+            id
+        };
+
+        info!("Creating virtio-media device: {media_cfg:?}");
+
+        let mut node = device_node!(id);
+
+        if let Some(media_socket) = media_cfg.socket.to_str() {
+            let (mut media_device, region) = virtio_devices::vhost_user::Media::new(
+                id.clone(),
+                media_socket,
+                self.seccomp_action.clone(),
+                self.exit_evt
+                    .try_clone()
+                    .map_err(DeviceManagerError::EventFd)?,
+                self.force_access_platform | media_cfg.pci_common.iommu,
+            )
+            .map_err(DeviceManagerError::CreateVirtioMedia)?;
+
+            let cache_base = self.pci_segments[media_cfg.pci_common.pci_segment as usize]
+                .mem64_allocator
+                .lock()
+                .unwrap()
+                .allocate(None, region.length as GuestUsize, Some(region.length))
+                .ok_or(DeviceManagerError::MediaRangeAllocation)?
+                .raw_value();
+
+            node.resources.push(Resource::MmioAddressRange {
+                base: cache_base,
+                size: region.length,
+            });
+
+            let shm_fd = unsafe { libc::memfd_create(b"virtio-media-shm\0".as_ptr().cast(), libc::MFD_CLOEXEC) };
+            if shm_fd < 0 { return Err(DeviceManagerError::MediaRangeAllocation); }
+            let shm_file = unsafe { std::fs::File::from_raw_fd(shm_fd) };
+            shm_file.set_len(region.length).map_err(|_| DeviceManagerError::MediaRangeAllocation)?;
+            let mmap_region = MmapRegion::build(
+                Some(vm_memory::FileOffset::new(shm_file, 0)),
+                region.length as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+            ).map_err(DeviceManagerError::NewMmapRegion)?;
+
+            let mem_slot = unsafe {
+                self.memory_manager
+                    .lock()
+                    .unwrap()
+                    .create_userspace_mapping(
+                        cache_base,
+                        mmap_region.size(),
+                        mmap_region.as_ptr(),
+                        false,
+                        false,
+                        false,
+                    )
+                    .map_err(DeviceManagerError::MemoryManager)?
+            };
+
+            let region_list = once((
+                region.id,
+                VirtioSharedMemory {
+                    offset: 0,
+                    len: region.length,
+                },
+            ))
+            .collect();
+
+            media_device.set_cache(VirtioSharedMemoryList {
+                mapping: Arc::new(mmap_region),
+                mem_slot,
+                addr: GuestAddress(cache_base),
+                region_list,
+            });
+
+            self.device_tree.lock().unwrap().insert(id.clone(), node);
+
+            Ok(MetaVirtioDevice {
+                virtio_device: Arc::new(Mutex::new(media_device))
+                    as Arc<Mutex<dyn virtio_devices::VirtioDevice>>,
+                pci_common: media_cfg.pci_common.clone(),
+                dma_handler: None,
+            })
+        } else {
+            Err(DeviceManagerError::NoVirtioMediaSock)
+        }
+    }
+
+    fn make_virtio_media_devices(&mut self) -> DeviceManagerResult<()> {
+        let mut media_devices = self.config.lock().unwrap().media.clone();
+        if let Some(media_list_cfg) = &mut media_devices {
+            for media_cfg in media_list_cfg.iter_mut() {
+                let device = self.make_media_device(media_cfg)?;
+                self.virtio_devices.push(device);
+            }
+        }
+        self.config.lock().unwrap().media = media_devices;
 
         Ok(())
     }
@@ -5220,6 +5348,16 @@ impl DeviceManager {
         self.validate_identifier(&gpu_cfg.pci_common.id)?;
 
         let device = self.make_virtio_gpu_device(gpu_cfg)?;
+        self.hotplug_virtio_pci_device(device)
+    }
+
+    pub fn add_media(
+        &mut self,
+        media_cfg: &mut MediaConfig,
+    ) -> DeviceManagerResult<PciDeviceInfo> {
+        self.validate_identifier(&media_cfg.pci_common.id)?;
+
+        let device = self.make_media_device(media_cfg)?;
         self.hotplug_virtio_pci_device(device)
     }
 

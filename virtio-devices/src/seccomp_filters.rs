@@ -25,6 +25,7 @@ pub enum Thread {
     VirtioVhostBlock,
     VirtioVhostFs,
     VirtioVhostGpu,
+    VirtioVhostMedia,
     VirtioGenericVhostUser,
     VirtioVhostNet,
     VirtioVhostNetCtl,
@@ -234,6 +235,10 @@ fn virtio_vhost_gpu_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
     ]
 }
 
+fn virtio_vhost_media_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
+    virtio_vhost_gpu_thread_rules()
+}
+
 fn virtio_vhost_net_ctl_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
     vec![]
 }
@@ -314,6 +319,7 @@ fn get_seccomp_rules(thread_type: Thread) -> Vec<(i64, Vec<SeccompRule>)> {
         Thread::VirtioRng => virtio_rng_thread_rules(),
         Thread::VirtioVhostBlock => virtio_vhost_block_thread_rules(),
         Thread::VirtioVhostGpu => virtio_vhost_gpu_thread_rules(),
+        Thread::VirtioVhostMedia => virtio_vhost_media_thread_rules(),
         Thread::VirtioVhostFs => virtio_vhost_fs_thread_rules(),
         Thread::VirtioGenericVhostUser => virtio_generic_vhost_user_thread_rules(),
         Thread::VirtioVhostNet => virtio_vhost_net_thread_rules(),

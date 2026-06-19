@@ -115,9 +115,9 @@ use crate::sev::MeasuredBootInfo;
 #[cfg(feature = "fw_cfg")]
 use crate::vm_config::FwCfgConfig;
 use crate::vm_config::{
-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, HotplugMethod, NetConfig,
-    NumaConfig, PayloadConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
-    GpuConfig,
+    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, HotplugMethod,
+    MediaConfig, NetConfig, NumaConfig, PayloadConfig, PmemConfig, UserDeviceConfig, VdpaConfig,
+    VmConfig, VsockConfig,
 };
 use crate::{
     CPU_MANAGER_SNAPSHOT_ID, DEVICE_MANAGER_SNAPSHOT_ID, GuestMemoryMmap,
@@ -2362,6 +2362,28 @@ impl Vm {
         {
             let mut config = self.config.lock().unwrap();
             add_to_config(&mut config.gpu, gpu_cfg);
+        }
+
+        self.device_manager
+            .lock()
+            .unwrap()
+            .notify_hotplug(AcpiNotificationFlags::PCI_DEVICES_CHANGED)
+            .map_err(Error::DeviceManager)?;
+
+        Ok(pci_device_info)
+    }
+
+    pub fn add_media(&mut self, mut media_cfg: MediaConfig) -> Result<PciDeviceInfo> {
+        let pci_device_info = self
+            .device_manager
+            .lock()
+            .unwrap()
+            .add_media(&mut media_cfg)
+            .map_err(Error::DeviceManager)?;
+
+        {
+            let mut config = self.config.lock().unwrap();
+            add_to_config(&mut config.media, media_cfg);
         }
 
         self.device_manager

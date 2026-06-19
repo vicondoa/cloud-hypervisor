@@ -65,9 +65,8 @@ use crate::migration_transport::{
 use crate::seccomp_filters::{Thread, get_seccomp_filter};
 use crate::vm::{Error as VmError, Vm, VmState};
 use crate::vm_config::{
-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
-    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
-    GpuConfig,
+    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, MediaConfig,
+    NetConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
 };
 
 mod acpi;
@@ -2391,6 +2390,29 @@ impl RequestHandler for Vmm {
         }
     }
 
+    fn vm_add_media(&mut self, media_cfg: MediaConfig) -> result::Result<Option<Vec<u8>>, VmError> {
+        self.vm_config.as_ref().ok_or(VmError::VmNotCreated)?;
+
+        {
+            let mut config = self.vm_config.as_ref().unwrap().lock().unwrap().clone();
+            add_to_config(&mut config.media, media_cfg.clone());
+            config.validate().map_err(VmError::ConfigValidation)?;
+        }
+
+        if let Some(ref mut vm) = self.vm {
+            let info = vm.add_media(media_cfg).inspect_err(|e| {
+                error!("Error when adding new media device to the VM: {e:?}");
+            })?;
+            serde_json::to_vec(&info)
+                .map(Some)
+                .map_err(VmError::SerializeJson)
+        } else {
+            let mut config = self.vm_config.as_ref().unwrap().lock().unwrap();
+            add_to_config(&mut config.media, media_cfg);
+            Ok(None)
+        }
+    }
+
     fn vm_add_pmem(&mut self, pmem_cfg: PmemConfig) -> result::Result<Option<Vec<u8>>, VmError> {
         self.vm_config.as_ref().ok_or(VmError::VmNotCreated)?;
 
@@ -2680,9 +2702,8 @@ mod unit_tests {
     use crate::vm_config::DebugConsoleConfig;
     use crate::vm_config::{
         CommonConsoleConfig, ConsoleConfig, ConsoleOutputMode, CoreScheduling, CpuFeatures,
-        CpusConfig, HotplugMethod, MemoryConfig, PayloadConfig, PciDeviceCommonConfig, RngConfig,
-        SerialConfig,
-    GpuConfig,
+        CpusConfig, GpuConfig, HotplugMethod, MediaConfig, MemoryConfig, PayloadConfig,
+        PciDeviceCommonConfig, RngConfig, SerialConfig,
     };
 
     fn create_dummy_vmm() -> Vmm {
@@ -2710,7 +2731,6 @@ mod unit_tests {
                 kvm_hyperv: false,
                 max_phys_bits: 46,
                 affinity: None,
-            gpu: None,
                 features: CpuFeatures::default(),
                 nested: true,
                 core_scheduling: CoreScheduling::default(),
@@ -2749,6 +2769,8 @@ mod unit_tests {
             },
             balloon: None,
             fs: None,
+            gpu: None,
+            media: None,
             generic_vhost_user: None,
             pmem: None,
             serial: SerialConfig {
@@ -3088,6 +3110,55 @@ mod unit_tests {
                 .clone()
                 .unwrap()[0],
             gpu_config
+        );
+    }
+
+    #[test]
+    fn test_vmm_vm_cold_add_media() {
+        let mut vmm = create_dummy_vmm();
+        let media_config = MediaConfig::parse("socket=/tmp/sock").unwrap();
+
+        assert!(matches!(
+            vmm.vm_add_media(media_config.clone()),
+            Err(VmError::VmNotCreated)
+        ));
+
+        let _ = vmm.vm_create(create_dummy_vm_config());
+        assert!(
+            vmm.vm_config
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .media
+                .is_none()
+        );
+
+        let result = vmm.vm_add_media(media_config.clone());
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+        assert_eq!(
+            vmm.vm_config
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .media
+                .clone()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            vmm.vm_config
+                .as_ref()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .media
+                .clone()
+                .unwrap()[0],
+            media_config
         );
     }
 
