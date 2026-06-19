@@ -103,4 +103,4 @@ jobs:
           git add nix/prebuilt.json
           git diff --cached --quiet && exit 0
           git commit -m "release: update prebuilt manifest for ${GITHUB_REF_NAME}"
-          git push origin HEAD
+          git push origin HEAD:refs/heads/nixling/main
