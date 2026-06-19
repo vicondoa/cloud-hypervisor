@@ -69,8 +69,6 @@ jobs:
 
       - name: Install Nix (for hash computation)
         uses: DeterminateSystems/nix-installer-action@main
-        with:
-
       - name: Compute SRI hashes and commit prebuilt manifest
         run: |
           set -euo pipefail
