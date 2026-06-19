@@ -23,6 +23,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libcap-ng-dev libglib2.0-dev libfdt-dev
+      - name: Fetch and patch vhost dependency
+        run: |
+          # CH workspace expects ../vhost/ with patched rust-vmm/vhost
+          cd ..
+          git clone --depth 1 --branch vhost-user-backend-v0.22.0 \
+            https://github.com/rust-vmm/vhost.git vhost
+          cd vhost
+          git apply $GITHUB_WORKSPACE/patches/0001-vhost_user-add-get_size-to-MsgHeader.patch || true
+          git apply $GITHUB_WORKSPACE/patches/0002-vhost-fix-receiving-reply-payloads.patch || true
+          git apply $GITHUB_WORKSPACE/patches/0003-shared-memory-region-compat.patch || true
       - name: Build cloud-hypervisor (release)
         run: cargo build --release --bin cloud-hypervisor --bin ch-remote
       - name: Package binaries
